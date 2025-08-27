@@ -3,13 +3,11 @@ from PIL import Image, ImageDraw, ImageFont
 import matplotlib.pyplot as plt
 import numpy as np
 
-# === SIMULATED MATRIX CONFIG ===
 WIDTH = 32
 HEIGHT = 8
-SCALE = 8  # how big each pixel will appear in the image
+SCALE = 8
 
-# === Initialize matplotlib once ===
-plt.ion()  # Turn on interactive mode
+plt.ion()
 fig, ax = plt.subplots()
 im = None
 
@@ -34,7 +32,6 @@ def simulate_matrix(text, color=(255, 255, 255)):
     fig.canvas.draw()
     fig.canvas.flush_events()
 
-# === Fetch and process planes ===
 def get_planes():
     planes = {}
     try:
@@ -72,7 +69,7 @@ def get_planes():
         print("Error fetching planes:", e)
         return {}
 
-# === Main loop ===
+# sim interface
 while True:
     planes = get_planes()
     print(planes)
