@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WindowPlane 1.4</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✈️</text></svg>">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f5f7fa;
+            color: #2c3e50;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            color: #34495e;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .info {
+            text-align: center;
+            margin-bottom: 20px;
+            color: #7f8c8d;
+            font-size: 14px;
+        }
+        #map-container {
+            position: relative;
+            border: 1px solid #cbd5e0;
+            border-radius: 6px;
+            margin: 0 auto;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            background: white;
+        }
+        .plane {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            background: #5dade2;
+            border-radius: 50%;
+            cursor: pointer;
+            transform: translate(-50%, -50%);
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            border: 2px solid #fff;
+            z-index: 1000;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+        }
+        .plane:hover {
+            width: 35px;
+            height: 35px;
+            background: #3498db;
+            z-index: 1001;
+        }
+        .custom-marker {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            z-index: 1000;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .custom-marker:hover {
+            transform: translate(-50%, -50%) scale(1.2);
+            z-index: 1001;
+        }
+        .tooltip {
+            position: absolute;
+            background: white;
+            color: #2c3e50;
+            padding: 12px;
+            border-radius: 6px;
+            pointer-events: none;
+            z-index: 1000;
+            display: none;
+            min-width: 200px;
+            border: 1px solid #cbd5e0;
+            font-size: 13px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+        .tooltip-row {
+            margin: 4px 0;
+        }
+        .tooltip-label {
+            color: #5dade2;
+            font-weight: 600;
+        }
+        .status {
+            text-align: center;
+            margin: 20px 0;
+            font-size: 16px;
+            color: #34495e;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WindowPlane</h1>
+        <div class="info">Your Window: 39.0095°N, 77.5187°W</div>
+        <div class="status" id="status">Initializing...</div>
+        <div id="map-container"></div>
+        <div class="tooltip" id="tooltip"></div>
+    </div>
+
+    <script>
+        let currentData = null;
+        let map = null;
+        let overlayPane = null;
+
+        setInterval(loadPlanes, 15000);
+
+        function initMap(bbox) {
+            const mapWidth = Math.min(1000, window.innerWidth - 100);
+            const mapHeight = mapWidth * 0.8;
+            
+            const container = document.getElementById('map-container');
+            container.style.width = mapWidth + 'px';
+            container.style.height = mapHeight + 'px';
+            container.innerHTML = '';
+            
+            const centerLat = (bbox.lamin + bbox.lamax) / 2;
+            const centerLon = (bbox.lomin + bbox.lomax) / 2;
+            
+            map = L.map('map-container', {
+                zoomControl: false,
+                attributionControl: true,
+                dragging: false,
+                touchZoom: false,
+                scrollWheelZoom: false,
+                doubleClickZoom: false,
+                boxZoom: false,
+                keyboard: false
+            }).setView([centerLat, centerLon], 11);
+            
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                attribution: '© OpenStreetMap contributors © CARTO',
+                subdomains: 'abcd',
+                maxZoom: 19
+            }).addTo(map);
+            
+            // bbox
+            map.fitBounds([
+                [bbox.lamin, bbox.lomin],
+                [bbox.lamax, bbox.lomax]
+            ]);
+            
+            const homePoint = [currentData.home.lat, currentData.home.lon];
+            const distance = 100;
+            
+            function calculateEndPoint(lat, lon, bearing, dist) {
+                const R = 6371;
+                const lat1 = lat * Math.PI / 180;
+                const lon1 = lon * Math.PI / 180;
+                const brng = bearing * Math.PI / 180;
+                
+                const lat2 = Math.asin(Math.sin(lat1) * Math.cos(dist / R) +
+                                      Math.cos(lat1) * Math.sin(dist / R) * Math.cos(brng));
+                const lon2 = lon1 + Math.atan2(Math.sin(brng) * Math.sin(dist / R) * Math.cos(lat1),
+                                               Math.cos(dist / R) - Math.sin(lat1) * Math.sin(lat2));
+                
+                return [lat2 * 180 / Math.PI, lon2 * 180 / Math.PI];
+            }
+            const point1 = calculateEndPoint(currentData.home.lat, currentData.home.lon, 203.8, distance);
+            const point2 = calculateEndPoint(currentData.home.lat, currentData.home.lon, 113.8, distance);
+            
+            L.polygon([homePoint, point1, point2], {
+                color: '#5dade2',
+                fillColor: '#5dade2',
+                fillOpacity: 0.1,
+                weight: 2
+            }).addTo(map);
+            
+            overlayPane = document.createElement('div');
+            overlayPane.style.position = 'absolute';
+            overlayPane.style.top = '0';
+            overlayPane.style.left = '0';
+            overlayPane.style.width = '100%';
+            overlayPane.style.height = '100%';
+            overlayPane.style.pointerEvents = 'none';
+            overlayPane.style.zIndex = '1000';
+            container.appendChild(overlayPane);
+        }
+
+        function latLonToPixel(lat, lon) {
+            const point = map.latLngToContainerPoint([lat, lon]);
+            return {x: point.x, y: point.y};
+        }
+
+        function addMarker(lat, lon, content, className, tooltipData) {
+            const pos = latLonToPixel(lat, lon);
+            const marker = document.createElement('div');
+            marker.className = className;
+            marker.style.left = pos.x + 'px';
+            marker.style.top = pos.y + 'px';
+            marker.style.pointerEvents = 'auto';
+            marker.innerHTML = content;
+            
+            if (tooltipData) {
+                marker.addEventListener('mouseenter', (e) => showTooltip(e, tooltipData));
+                marker.addEventListener('mousemove', (e) => moveTooltip(e));
+                marker.addEventListener('mouseleave', hideTooltip);
+            }
+            
+            overlayPane.appendChild(marker);
+            return marker;
+        }
+
+        function loadPlanes() {
+            document.getElementById('status').textContent = 'Loading...';
+            
+            fetch('/api/planes')
+                .then(r => r.json())
+                .then(data => {
+                    currentData = data;
+                    if (!map) {
+                        initMap(data.bbox);
+                    }
+                    renderPlanes(data);
+                    const count = Object.keys(data.planes).length;
+                    document.getElementById('status').textContent = 
+                        count === 0 ? 'No planes nearby' : `${count} plane${count > 1 ? 's' : ''} detected`;
+                })
+                .catch(err => {
+                    console.error(err);
+                    document.getElementById('status').textContent = 'Error loading planes';
+                });
+        }
+
+        function renderPlanes(data) {
+            overlayPane.innerHTML = '';
+            
+            addMarker(data.home.lat, data.home.lon, '🏠', 'custom-marker', {
+                label: 'Home',
+                details: `${data.home.lat.toFixed(4)}°N, ${data.home.lon.toFixed(4)}°W`
+            });
+            
+            if (typeof CUSTOM_MARKERS !== 'undefined') {
+                CUSTOM_MARKERS.forEach(marker => {
+                    addMarker(marker.lat, marker.lon, marker.icon, 'custom-marker', {
+                        label: marker.label,
+                        details: `${marker.lat.toFixed(4)}°N, ${marker.lon.toFixed(4)}°W`
+                    });
+                });
+            }
+            
+            Object.entries(data.planes).forEach(([id, plane]) => {
+                if (plane.coords[0] === null || plane.coords[1] === null) return;
+                
+                const planeEl = addMarker(plane.coords[0], plane.coords[1], '✈️', 'plane', plane);
+                
+                if (plane.heading !== null) {
+                    planeEl.style.transform = `translate(-50%, -50%) rotate(${plane.heading}deg)`;
+                }
+            });
+        }
+        
+        if (map) {
+            map.on('move zoom', () => {
+                if (currentData) renderPlanes(currentData);
+            });
+        }
+
+        function showTooltip(e, data) {
+            const tooltip = document.getElementById('tooltip');
+            
+            if (data.callsign !== undefined) {
+
+                // it's a bird!  it's a plane!
+                const alt = data.altitude !== null ? Math.round(data.altitude * 3.28084) : 'N/A';
+                const vel = data.velocity !== null ? Math.round(data.velocity * 1.94384) : 'N/A';
+                const hdg = data.heading !== null ? Math.round(data.heading) : 'N/A';
+                
+                tooltip.innerHTML = `
+                    <div class="tooltip-row"><span class="tooltip-label">Callsign:</span> ${data.callsign}</div>
+                    <div class="tooltip-row"><span class="tooltip-label">ICAO24:</span> ${data.icao24}</div>
+                    <div class="tooltip-row"><span class="tooltip-label">Altitude:</span> ${alt} ft</div>
+                    <div class="tooltip-row"><span class="tooltip-label">Speed:</span> ${vel} kts</div>
+                    <div class="tooltip-row"><span class="tooltip-label">Heading:</span> ${hdg}°</div>
+                    <div class="tooltip-row"><span class="tooltip-label">Coords:</span> ${data.coords[0].toFixed(4)}, ${data.coords[1].toFixed(4)}</div>
+                `;
+            } else {
+                tooltip.innerHTML = `
+                    <div class="tooltip-row"><span class="tooltip-label">${data.label}</span></div>
+                    <div class="tooltip-row">${data.details}</div>
+                `;
+            }
+            
+            tooltip.style.display = 'block';
+            moveTooltip(e);
+        }
+
+        function moveTooltip(e) {
+            const tooltip = document.getElementById('tooltip');
+            tooltip.style.left = (e.pageX + 15) + 'px';
+            tooltip.style.top = (e.pageY + 15) + 'px';
+        }
+
+        function hideTooltip() {
+            document.getElementById('tooltip').style.display = 'none';
+        }
+
+        window.addEventListener('load', () => {
+            loadPlanes();
+            loadPlanes();
+        });
+    </script>
+</body>
+</html>
