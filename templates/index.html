@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>WindowPlane 1.4</title>
+    <title>WindowPlane 2.0</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✈️</text></svg>">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -99,6 +99,16 @@
             font-size: 16px;
             color: #34495e;
         }
+        .warning {
+            text-align: center;
+            margin: 10px 0;
+            padding: 10px;
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 6px;
+            font-size: 13px;
+            color: #856404;
+        }
     </style>
 </head>
 <body>
@@ -111,11 +121,24 @@
     </div>
 
     <script>
+        // yeah I know these are public I don't care about them
+        const OPENSKY_USERNAME = 'rjacr-api-client';
+        const OPENSKY_PASSWORD = 'DKyKfIe35omVZThfELqpraE9sjuBGEXs';
+        
+        const HOME_LAT = 39.00950594490651;
+        const HOME_LON = -77.51869347001733;
+        
+        const BBOX = {
+            "lamin": 38.8824,
+            "lamax": 39.0070,
+            "lomin": -77.5702,
+            "lomax": -77.4094
+        };
+
         let currentData = null;
         let map = null;
         let overlayPane = null;
-
-        setInterval(loadPlanes, 15000);
+        let useProxy = false;
 
         function initMap(bbox) {
             const mapWidth = Math.min(1000, window.innerWidth - 100);
@@ -146,13 +169,12 @@
                 maxZoom: 19
             }).addTo(map);
             
-            // bbox
             map.fitBounds([
                 [bbox.lamin, bbox.lomin],
                 [bbox.lamax, bbox.lomax]
             ]);
             
-            const homePoint = [currentData.home.lat, currentData.home.lon];
+            const homePoint = [HOME_LAT, HOME_LON];
             const distance = 100;
             
             function calculateEndPoint(lat, lon, bearing, dist) {
@@ -168,8 +190,9 @@
                 
                 return [lat2 * 180 / Math.PI, lon2 * 180 / Math.PI];
             }
-            const point1 = calculateEndPoint(currentData.home.lat, currentData.home.lon, 203.8, distance);
-            const point2 = calculateEndPoint(currentData.home.lat, currentData.home.lon, 113.8, distance);
+            
+            const point1 = calculateEndPoint(HOME_LAT, HOME_LON, 203.8, distance);
+            const point2 = calculateEndPoint(HOME_LAT, HOME_LON, 113.8, distance);
             
             L.polygon([homePoint, point1, point2], {
                 color: '#5dade2',
@@ -213,25 +236,69 @@
             return marker;
         }
 
-        function loadPlanes() {
-            document.getElementById('status').textContent = 'Loading...';
-            
-            fetch('/api/planes')
-                .then(r => r.json())
-                .then(data => {
-                    currentData = data;
-                    if (!map) {
-                        initMap(data.bbox);
+        async function loadPlanes() {
+            document.getElementById('status').textContent = 'Loading…';
+
+            const params = new URLSearchParams({
+                lamin: BBOX.lamin,
+                lomin: BBOX.lomin,
+                lamax: BBOX.lamax,
+                lomax: BBOX.lomax
+            });
+            const apiUrl = `https://opensky-network.org/api/states/all?${params}`;
+            console.log(apiUrl)
+
+            const proxies = [
+                'https://api.allorigins.win/get?url=',
+                'https://api.codetabs.com/v1/proxy?quest=',
+                'https://cors.lol/?',
+                'https://cors.x2u.in/?',
+                'https://gobetween.oklabs.org/'
+            ];
+
+            let data;
+            for (const p of proxies) {
+                try {
+                    const resp = await fetch(p + encodeURIComponent(apiUrl));
+                    if (!resp.ok) throw new Error(resp.status);
+
+                    if (p.includes('allorigins') || p.includes('codetabs')) {
+                        const wrapper = await resp.json();
+                        data = JSON.parse(wrapper.contents || wrapper);
+                    } else {
+                        data = await resp.json();
                     }
-                    renderPlanes(data);
-                    const count = Object.keys(data.planes).length;
-                    document.getElementById('status').textContent = 
-                        count === 0 ? 'No planes nearby' : `${count} plane${count > 1 ? 's' : ''} detected`;
-                })
-                .catch(err => {
-                    console.error(err);
-                    document.getElementById('status').textContent = 'Error loading planes';
-                });
+                    document.getElementById('status').textContent = 'Connected!';
+                    break;
+                } catch (e) {
+                    console.warn(`Proxy ${p} failed, trying next…`);
+                }
+            }
+
+            if (!data?.states) {
+                document.getElementById('status').textContent = 'No planes right now – retrying in 15 s';
+                return;
+            }
+
+            const planes = {};
+            data.states.forEach((a, i) => {
+                planes[i] = {
+                    callsign: a[1] ? a[1].trim() : 'Unknown',
+                    icao24: a[0],
+                    altitude: a[7],
+                    coords: [a[6], a[5]],
+                    velocity: a[9],
+                    heading: a[10]
+                };
+            });
+
+            currentData = { planes, bbox: BBOX, home: { lat: HOME_LAT, lon: HOME_LON } };
+            if (!map) initMap(BBOX);
+            renderPlanes(currentData);
+
+            const cnt = Object.keys(planes).length;
+            document.getElementById('status').textContent =
+                cnt === 0 ? 'No planes nearby' : `${cnt} plane${cnt > 1 ? 's' : ''} detected`;
         }
 
         function renderPlanes(data) {
@@ -239,17 +306,8 @@
             
             addMarker(data.home.lat, data.home.lon, '🏠', 'custom-marker', {
                 label: 'Home',
-                details: `${data.home.lat.toFixed(4)}°N, ${data.home.lon.toFixed(4)}°W`
+                details: `${data.home.lat.toFixed(4)}°N, ${Math.abs(data.home.lon).toFixed(4)}°W`
             });
-            
-            if (typeof CUSTOM_MARKERS !== 'undefined') {
-                CUSTOM_MARKERS.forEach(marker => {
-                    addMarker(marker.lat, marker.lon, marker.icon, 'custom-marker', {
-                        label: marker.label,
-                        details: `${marker.lat.toFixed(4)}°N, ${marker.lon.toFixed(4)}°W`
-                    });
-                });
-            }
             
             Object.entries(data.planes).forEach(([id, plane]) => {
                 if (plane.coords[0] === null || plane.coords[1] === null) return;
@@ -261,19 +319,11 @@
                 }
             });
         }
-        
-        if (map) {
-            map.on('move zoom', () => {
-                if (currentData) renderPlanes(currentData);
-            });
-        }
 
         function showTooltip(e, data) {
             const tooltip = document.getElementById('tooltip');
             
             if (data.callsign !== undefined) {
-
-                // it's a bird!  it's a plane!
                 const alt = data.altitude !== null ? Math.round(data.altitude * 3.28084) : 'N/A';
                 const vel = data.velocity !== null ? Math.round(data.velocity * 1.94384) : 'N/A';
                 const hdg = data.heading !== null ? Math.round(data.heading) : 'N/A';
@@ -309,7 +359,7 @@
 
         window.addEventListener('load', () => {
             loadPlanes();
-            loadPlanes();
+            setInterval(loadPlanes, 13000);
         });
     </script>
 </body>
